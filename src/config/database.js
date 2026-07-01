@@ -3,9 +3,6 @@ require('dotenv').config();
 const { Sequelize } = require('sequelize');
 const logger = require('../utils/logger');
 
-// ── Connection config ─────────────────────────────────────────────────────
-// Render provides DATABASE_URL automatically when a PostgreSQL database is
-// linked to the service.  Fall back to individual params for local dev.
 const poolConfig = {
   max:     parseInt(process.env.DB_POOL_MAX)     || 10,
   min:     parseInt(process.env.DB_POOL_MIN)     || 2,
@@ -31,18 +28,13 @@ const sharedOptions = {
 let sequelize;
 
 if (process.env.DATABASE_URL) {
-  // ── Render / cloud PostgreSQL (uses connection string + SSL) ─────────
   sequelize = new Sequelize(process.env.DATABASE_URL, {
     ...sharedOptions,
     dialectOptions: {
-      ssl: {
-        require:            true,
-        rejectUnauthorized: false, // Render uses self-signed certs internally
-      },
+      ssl: { require: true, rejectUnauthorized: false },
     },
   });
 } else {
-  // ── Local development (individual params) ────────────────────────────
   sequelize = new Sequelize(
     process.env.DB_NAME     || 'prohorizon_db',
     process.env.DB_USER     || 'postgres',
@@ -58,20 +50,29 @@ if (process.env.DATABASE_URL) {
   );
 }
 
+// Retry up to 8 times (~2 min) - Render free PostgreSQL can take 30-90s to
+// become reachable after a fresh deploy.
 const connectDB = async () => {
-  try {
-    await sequelize.authenticate();
-    logger.info('✅  PostgreSQL connected');
-    // sync({ alter: true }) in dev so columns stay in sync;
-    // sync({ force: false }) in prod — never drop tables on cloud
-    await sequelize.sync({
-      alter: process.env.NODE_ENV === 'development',
-      force: false,
-    });
-    logger.info('✅  Database schema synchronized');
-  } catch (err) {
-    logger.error(`❌  Database connection failed: ${err.message}`);
-    process.exit(1);
+  const MAX_RETRIES = 8;
+  const BASE_DELAY  = 5000;
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      await sequelize.authenticate();
+      logger.info('PostgreSQL connected');
+      await sequelize.sync({ force: false, alter: false });
+      logger.info('Database schema synchronized');
+      return;
+    } catch (err) {
+      const isLast = attempt === MAX_RETRIES;
+      const delay  = BASE_DELAY * attempt;
+      if (isLast) {
+        logger.error('Database connection failed after ' + MAX_RETRIES + ' attempts: ' + err.message);
+        process.exit(1);
+      }
+      logger.warn('DB connect attempt ' + attempt + '/' + MAX_RETRIES + ' failed. Retrying in ' + (delay / 1000) + 's...');
+      await new Promise(function(r) { setTimeout(r, delay); });
+    }
   }
 };
 
