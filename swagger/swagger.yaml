@@ -1,0 +1,747 @@
+openapi: 3.0.3
+info:
+  title: ProHorizon Scope Tracker API
+  description: |
+    Enterprise backend API for ProHorizon Scope Tracker.
+    Supports 13 modules: Auth, Users, Roles, Projects, Scopes, Tasks, Teams, Clients, Documents, Notifications, Audit Logs, Reports, Dashboard.
+  version: 1.0.0
+  contact:
+    name: ProHorizon DigiTech Pvt Ltd
+    email: info@horizonprodata.com
+
+servers:
+  - url: http://localhost:5000/api/v1
+    description: Development
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    SuccessResponse:
+      type: object
+      properties:
+        status: { type: string, example: success }
+        message: { type: string }
+        data: { }
+        timestamp: { type: string, format: date-time }
+
+    ErrorResponse:
+      type: object
+      properties:
+        status: { type: string, example: error }
+        message: { type: string }
+        timestamp: { type: string, format: date-time }
+
+    PaginatedResponse:
+      type: object
+      properties:
+        status: { type: string }
+        data: { type: array, items: {} }
+        pagination:
+          type: object
+          properties:
+            total: { type: integer }
+            page: { type: integer }
+            limit: { type: integer }
+            totalPages: { type: integer }
+            hasNextPage: { type: boolean }
+            hasPrevPage: { type: boolean }
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email, example: admin@prohorizon.com }
+        password: { type: string, example: Admin@1234 }
+
+    LoginResponse:
+      type: object
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        user:
+          $ref: '#/components/schemas/User'
+
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        employee_id: { type: string }
+        first_name: { type: string }
+        last_name: { type: string }
+        email: { type: string, format: email }
+        phone: { type: string }
+        designation: { type: string }
+        is_active: { type: boolean }
+        avatar_url: { type: string }
+        last_login_at: { type: string, format: date-time }
+        roles: { type: array, items: { $ref: '#/components/schemas/Role' } }
+
+    Role:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        display_name: { type: string }
+        permissions: { type: array, items: { $ref: '#/components/schemas/Permission' } }
+
+    Permission:
+      type: object
+      properties:
+        id: { type: integer }
+        module: { type: string }
+        action: { type: string }
+        name: { type: string }
+
+    Project:
+      type: object
+      properties:
+        id: { type: integer }
+        project_code: { type: string }
+        name: { type: string }
+        status: { type: string, enum: [planning, active, on_hold, completed, cancelled] }
+        priority: { type: string, enum: [low, medium, high, critical] }
+        health: { type: string, enum: [green, amber, red] }
+        completion_percentage: { type: number }
+        start_date: { type: string, format: date }
+        end_date: { type: string, format: date }
+        budget: { type: number }
+        client: { $ref: '#/components/schemas/Client' }
+        manager: { $ref: '#/components/schemas/User' }
+
+    Scope:
+      type: object
+      properties:
+        id: { type: integer }
+        title: { type: string }
+        status: { type: string, enum: [draft, under_review, approved, rejected, change_requested] }
+        current_version: { type: string }
+        priority: { type: string }
+        project: { $ref: '#/components/schemas/Project' }
+
+    Task:
+      type: object
+      properties:
+        id: { type: integer }
+        task_code: { type: string }
+        title: { type: string }
+        status: { type: string, enum: [backlog, todo, in_progress, code_review, testing, done, cancelled] }
+        priority: { type: string, enum: [low, medium, high, critical] }
+        task_type: { type: string }
+        due_date: { type: string, format: date }
+        estimated_hours: { type: number }
+        logged_hours: { type: number }
+        assignee: { $ref: '#/components/schemas/User' }
+        project: { $ref: '#/components/schemas/Project' }
+
+    Client:
+      type: object
+      properties:
+        id: { type: integer }
+        client_code: { type: string }
+        company_name: { type: string }
+        industry: { type: string }
+        contact_person: { type: string }
+        contact_email: { type: string }
+        status: { type: string }
+
+    AuditLog:
+      type: object
+      properties:
+        id: { type: integer }
+        action: { type: string }
+        module: { type: string }
+        entity_type: { type: string }
+        entity_id: { type: integer }
+        entity_name: { type: string }
+        ip_address: { type: string }
+        created_at: { type: string, format: date-time }
+        user: { $ref: '#/components/schemas/User' }
+
+security:
+  - BearerAuth: []
+
+paths:
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Login with email and password
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/LoginResponse' }
+        '401': { description: Invalid credentials }
+        '423': { description: Account locked }
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh access token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                refreshToken: { type: string }
+      responses:
+        '200': { description: Tokens refreshed }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout and invalidate refresh token
+      responses:
+        '200': { description: Logged out }
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      summary: Get current user profile with roles and permissions
+      responses:
+        '200': { description: User profile }
+
+  /auth/change-password:
+    put:
+      tags: [Auth]
+      summary: Change own password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string }
+      responses:
+        '200': { description: Password changed }
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request password reset email
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email: { type: string, format: email }
+      responses:
+        '200': { description: Reset email sent if account exists }
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset password using token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                token: { type: string }
+                newPassword: { type: string }
+      responses:
+        '200': { description: Password reset }
+
+  /users:
+    get:
+      tags: [Users]
+      summary: List all users (paginated)
+      parameters:
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: department_id
+          schema: { type: integer }
+        - in: query
+          name: is_active
+          schema: { type: boolean }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+      responses:
+        '200': { description: Paginated users }
+    post:
+      tags: [Users]
+      summary: Create new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [first_name, last_name, email, password_hash]
+              properties:
+                first_name: { type: string }
+                last_name: { type: string }
+                email: { type: string, format: email }
+                password_hash: { type: string, description: Initial password }
+                role_ids: { type: array, items: { type: integer } }
+                department_id: { type: integer }
+                designation: { type: string }
+      responses:
+        '201': { description: User created }
+
+  /users/{id}:
+    get:
+      tags: [Users]
+      summary: Get user by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: User object }
+    put:
+      tags: [Users]
+      summary: Update user
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Updated }
+
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List projects
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: client_id
+          schema: { type: integer }
+      responses:
+        '200': { description: Projects list }
+    post:
+      tags: [Projects]
+      summary: Create project
+      responses:
+        '201': { description: Created }
+
+  /projects/{id}:
+    get:
+      tags: [Projects]
+      summary: Get project with members and stats
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Project detail }
+    put:
+      tags: [Projects]
+      summary: Update project
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Updated }
+    delete:
+      tags: [Projects]
+      summary: Cancel project (soft delete)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Cancelled }
+
+  /projects/{id}/stats:
+    get:
+      tags: [Projects]
+      summary: Get project task and scope statistics
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Stats }
+
+  /projects/{id}/members:
+    post:
+      tags: [Projects]
+      summary: Add member to project
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Member added }
+
+  /scopes:
+    get:
+      tags: [Scopes]
+      summary: List scopes
+      parameters:
+        - in: query
+          name: project_id
+          schema: { type: integer }
+        - in: query
+          name: status
+          schema: { type: string }
+      responses:
+        '200': { description: Scopes }
+    post:
+      tags: [Scopes]
+      summary: Create scope
+      responses:
+        '201': { description: Created }
+
+  /scopes/{id}/approve:
+    post:
+      tags: [Scopes]
+      summary: Approve a scope
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Approved }
+
+  /scopes/{id}/versions:
+    get:
+      tags: [Scopes]
+      summary: Get scope version history
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Version history }
+
+  /tasks:
+    get:
+      tags: [Tasks]
+      summary: List tasks
+      parameters:
+        - in: query
+          name: project_id
+          schema: { type: integer }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: assignee_id
+          schema: { type: integer }
+      responses:
+        '200': { description: Tasks }
+    post:
+      tags: [Tasks]
+      summary: Create task
+      responses:
+        '201': { description: Created }
+
+  /tasks/{id}/move:
+    patch:
+      tags: [Tasks]
+      summary: Move task on Kanban board
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                status: { type: string }
+                position: { type: integer }
+      responses:
+        '200': { description: Moved }
+
+  /tasks/{id}/comments:
+    post:
+      tags: [Tasks]
+      summary: Add comment to task
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '201': { description: Comment added }
+
+  /tasks/{id}/work-logs:
+    post:
+      tags: [Tasks]
+      summary: Log work hours on task
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '201': { description: Work logged }
+    get:
+      tags: [Tasks]
+      summary: Get work logs for task
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Work logs }
+
+  /tasks/{id}/attachments:
+    post:
+      tags: [Tasks]
+      summary: Upload attachments to task
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                attachments:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+      responses:
+        '201': { description: Attachments uploaded }
+
+  /clients:
+    get:
+      tags: [Clients]
+      summary: List clients
+      responses:
+        '200': { description: Clients }
+    post:
+      tags: [Clients]
+      summary: Create client
+      responses:
+        '201': { description: Created }
+
+  /documents:
+    get:
+      tags: [Documents]
+      summary: List documents
+      responses:
+        '200': { description: Documents }
+    post:
+      tags: [Documents]
+      summary: Upload document
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                title: { type: string }
+                project_id: { type: integer }
+                category: { type: string }
+      responses:
+        '201': { description: Uploaded }
+
+  /documents/{id}/download:
+    get:
+      tags: [Documents]
+      summary: Download document file
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: File download
+          content:
+            application/octet-stream: {}
+
+  /notifications:
+    get:
+      tags: [Notifications]
+      summary: Get current user notifications
+      parameters:
+        - in: query
+          name: unread_only
+          schema: { type: boolean }
+      responses:
+        '200': { description: Notifications with unread count }
+
+  /notifications/read-all:
+    put:
+      tags: [Notifications]
+      summary: Mark all notifications as read
+      responses:
+        '200': { description: All marked read }
+
+  /notifications/{id}/read:
+    put:
+      tags: [Notifications]
+      summary: Mark single notification as read
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200': { description: Marked read }
+
+  /audit-logs:
+    get:
+      tags: [Audit Logs]
+      summary: List audit logs (admin only)
+      parameters:
+        - in: query
+          name: module
+          schema: { type: string }
+        - in: query
+          name: action
+          schema: { type: string }
+        - in: query
+          name: user_id
+          schema: { type: integer }
+        - in: query
+          name: from_date
+          schema: { type: string, format: date }
+        - in: query
+          name: to_date
+          schema: { type: string, format: date }
+      responses:
+        '200': { description: Audit logs }
+
+  /reports/dashboard:
+    get:
+      tags: [Reports]
+      summary: Get dashboard statistics
+      responses:
+        '200': { description: Dashboard stats }
+
+  /reports/project-health:
+    get:
+      tags: [Reports]
+      summary: Project health report
+      responses:
+        '200': { description: Project health data }
+
+  /reports/export/projects/excel:
+    get:
+      tags: [Reports]
+      summary: Export projects report as Excel
+      responses:
+        '200':
+          description: Excel file
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {}
+
+  /reports/export/tasks/excel:
+    get:
+      tags: [Reports]
+      summary: Export tasks as Excel
+      parameters:
+        - in: query
+          name: project_id
+          schema: { type: integer }
+      responses:
+        '200':
+          description: Excel file
+          content:
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {}
+
+  /reports/export/projects/{id}/pdf:
+    get:
+      tags: [Reports]
+      summary: Export single project as PDF
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        '200':
+          description: PDF file
+          content:
+            application/pdf: {}
+
+  /roles:
+    get:
+      tags: [Roles]
+      summary: List all roles with permissions
+      responses:
+        '200': { description: Roles }
+
+  /roles/permissions:
+    get:
+      tags: [Roles]
+      summary: List all available permissions
+      responses:
+        '200': { description: All permissions }
+
+  /teams:
+    get:
+      tags: [Teams]
+      summary: List teams
+      responses:
+        '200': { description: Teams }
+    post:
+      tags: [Teams]
+      summary: Create team
+      responses:
+        '201': { description: Created }
+
+  /health:
+    get:
+      tags: [System]
+      summary: API health check
+      security: []
+      responses:
+        '200': { description: Service status }
