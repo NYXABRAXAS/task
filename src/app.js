@@ -1,108 +1,97 @@
 'use strict';
 require('dotenv').config();
-const express    = require('express');
-const helmet     = require('helmet');
-const compression= require('compression');
-const morgan     = require('morgan');
-const path       = require('path');
-const { v4: uuidv4 } = require('uuid');
-const YAML       = require('yamljs');
-const swaggerUi  = require('swagger-ui-express');
+var express     = require('express');
+var helmet      = require('helmet');
+var compression = require('compression');
+var morgan      = require('morgan');
+var path        = require('path');
+var uuidv4      = require('uuid').v4;
 
-const logger       = require('./utils/logger');
-const { generalLimiter } = require('./middleware/rateLimiter');
-const errorHandler = require('./middleware/errorHandler');
-const routes       = require('./routes');
+var logger       = require('./utils/logger');
+var rateLimiter  = require('./middleware/rateLimiter');
+var errorHandler = require('./middleware/errorHandler');
+var routes       = require('./routes');
 
-const app = express();
+var app = express();
 
-// ══════════════════════════════════════════════════════════════════════════
-// CORS — raw middleware, FIRST in the stack, before everything else.
-// On Render the frontend is served from the same origin so CORS headers
-// are only needed for development (Live Server, Postman, etc.).
-// ══════════════════════════════════════════════════════════════════════════
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-  if (origin) {
-    res.setHeader('Access-Control-Allow-Origin',      origin);
-  } else {
-    res.setHeader('Access-Control-Allow-Origin',      '*');
-  }
-  res.setHeader('Access-Control-Allow-Credentials',   'true');
-  res.setHeader('Access-Control-Allow-Methods',       'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers',       'Content-Type, Authorization, X-Request-Id, Accept');
-  res.setHeader('Access-Control-Max-Age',             '86400');
-
+// ── CORS — raw middleware, ABSOLUTE FIRST ─────────────────────────────────
+// Must be before Helmet, rate limiters, and everything else.
+// Reflects the requesting origin so any domain can access the API.
+app.use(function(req, res, next) {
+  var origin = req.headers.origin;
+  res.setHeader('Access-Control-Allow-Origin',      origin || '*');
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods',     'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers',     'Content-Type, Authorization, X-Request-Id, Accept');
+  res.setHeader('Access-Control-Max-Age',           '86400');
   if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 });
 
-// ── Security headers (after CORS so Helmet cannot strip them) ────────────
+// ── Security headers ───────────────────────────────────────────────────────
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
-  // Allow inline scripts and styles required by the SPA
-  contentSecurityPolicy: false,
+  contentSecurityPolicy:     false, // SPA has inline scripts
 }));
 
-// ── Compression ──────────────────────────────────────────────────────────
+// ── Compression ────────────────────────────────────────────────────────────
 app.use(compression());
 
-// ── Request ID ───────────────────────────────────────────────────────────
-app.use((req, res, next) => {
+// ── Request ID ────────────────────────────────────────────────────────────
+app.use(function(req, res, next) {
   req.id = uuidv4();
   res.setHeader('X-Request-Id', req.id);
   next();
 });
 
-// ── HTTP logging ─────────────────────────────────────────────────────────
-app.use(morgan('[:date[iso]] :method :url :status :res[content-length] - :response-time ms', {
-  stream: { write: (msg) => logger.info(msg.trim()) },
-  skip:   (req) => req.url === '/api/v1/health',
+// ── HTTP logging ──────────────────────────────────────────────────────────
+app.use(morgan('[:date[iso]] :method :url :status :res[content-length]b - :response-time ms', {
+  stream: { write: function(msg) { logger.info(msg.trim()); } },
+  skip:   function(req) { return req.url === '/api/v1/health'; },
 }));
 
-// ── Body parsers ─────────────────────────────────────────────────────────
+// ── Body parsers ──────────────────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// ── Serve uploaded files ──────────────────────────────────────────────────
+// ── Static uploads ────────────────────────────────────────────────────────
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────
-app.use('/api', generalLimiter);
+app.use('/api', rateLimiter.generalLimiter);
 
-// ── Swagger UI (dev only) ─────────────────────────────────────────────────
+// ── Swagger (dev/staging only) ────────────────────────────────────────────
 if (process.env.SWAGGER_ENABLED === 'true') {
   try {
-    const swaggerDoc = YAML.load(path.join(__dirname, '..', 'swagger', 'swagger.yaml'));
+    var YAML       = require('yamljs');
+    var swaggerUi  = require('swagger-ui-express');
+    var swaggerDoc = YAML.load(path.join(__dirname, '..', 'swagger', 'swagger.yaml'));
     app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(swaggerDoc, {
-      customSiteTitle: 'ProHorizon API Docs',
+      customSiteTitle: 'ProHorizon API',
       customCss:       '.swagger-ui .topbar { background: #3B5BDB; }',
     }));
-    logger.info('📄  Swagger UI: /api/docs');
+    logger.info('Swagger UI: /api/docs');
   } catch (e) {
-    logger.warn(`Swagger load failed: ${e.message}`);
+    logger.warn('Swagger load failed: ' + e.message);
   }
 }
 
-// ── API Routes ────────────────────────────────────────────────────────────
+// ── API routes ────────────────────────────────────────────────────────────
 app.use('/api/v1', routes);
 
-// ── Serve Frontend SPA (production) ──────────────────────────────────────
-// All non-API routes serve index.html so the SPA handles client routing.
-const publicDir = path.join(__dirname, '..', 'public');
+// ── Serve frontend SPA ────────────────────────────────────────────────────
+var publicDir = path.join(__dirname, '..', 'public');
 app.use(express.static(publicDir));
-app.get('*', (req, res, next) => {
-  // Don't intercept API or upload paths
+
+// SPA fallback — must come AFTER express.static and API routes
+app.get('*', function(req, res, next) {
   if (req.path.startsWith('/api') || req.path.startsWith('/uploads')) return next();
   res.sendFile(path.join(publicDir, 'index.html'));
 });
 
-// ── 404 handler ───────────────────────────────────────────────────────────
-app.use((req, res) => {
-  res.status(404).json({
-    status:  'error',
-    message: `Route ${req.method} ${req.originalUrl} not found`,
-  });
+// ── 404 ───────────────────────────────────────────────────────────────────
+app.use(function(req, res) {
+  res.status(404).json({ status: 'error', message: 'Route ' + req.method + ' ' + req.originalUrl + ' not found' });
 });
 
 // ── Global error handler ──────────────────────────────────────────────────

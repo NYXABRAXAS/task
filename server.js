@@ -1,135 +1,146 @@
 'use strict';
 require('dotenv').config();
-const http = require('http');
-const { Server } = require('socket.io');
+var http = require('http');
+var SocketIO = require('socket.io').Server;
 
-const app             = require('./src/app');
-const { connectDB }   = require('./src/config/database');
-const logger          = require('./src/utils/logger');
-const notificationSvc = require('./src/services/notificationService');
+var app             = require('./src/app');
+var dbConfig        = require('./src/config/database');
+var logger          = require('./src/utils/logger');
+var notificationSvc = require('./src/services/notificationService');
 
-const PORT = parseInt(process.env.PORT) || 10000;
+var PORT = parseInt(process.env.PORT) || 10000;
 
-// ── HTTP Server ────────────────────────────────────────────────────────────
-const server = http.createServer(app);
+// ── HTTP server ────────────────────────────────────────────────────────────
+var server = http.createServer(app);
 
 // ── Socket.io ─────────────────────────────────────────────────────────────
-const io = new Server(server, {
+var io = new SocketIO(server, {
   cors: { origin: true, methods: ['GET', 'POST'], credentials: true },
   transports: ['websocket', 'polling'],
 });
 
-io.use(async (socket, next) => {
+io.use(async function(socket, next) {
   try {
-    const token =
-      socket.handshake.auth.token ||
-      (socket.handshake.headers['authorization'] || '').split(' ')[1];
-    if (!token) return next(new Error('Authentication required'));
+    var rawToken = socket.handshake.auth.token ||
+                   (socket.handshake.headers['authorization'] || '').replace('Bearer ', '');
+    if (!rawToken) return next(new Error('Authentication required'));
 
-    const jwt     = require('jsonwebtoken');
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const { User } = require('./src/models');
-    const user = await User.findByPk(decoded.id, {
+    var jwt     = require('jsonwebtoken');
+    var decoded = jwt.verify(rawToken, process.env.JWT_SECRET);
+    var models  = require('./src/models');
+    var user    = await models.User.findByPk(decoded.id, {
       attributes: ['id', 'first_name', 'last_name', 'email', 'is_active'],
     });
     if (!user || !user.is_active) return next(new Error('User not found or inactive'));
 
     socket.userId = user.id;
-    socket.user   = user;
     next();
-  } catch (err) {
+  } catch (e) {
     next(new Error('Invalid token'));
   }
 });
 
-io.on('connection', (socket) => {
-  const uid = socket.userId;
-  logger.info('Socket connected: user ' + uid + ' (' + socket.id + ')');
+io.on('connection', function(socket) {
+  var uid = socket.userId;
   socket.join('user:' + uid);
-
   socket.on('join:project',  function(pid)  { socket.join('project:' + pid); });
   socket.on('leave:project', function(pid)  { socket.leave('project:' + pid); });
   socket.on('task:update',   function(data) { socket.to('project:' + data.project_id).emit('task:updated',  data); });
   socket.on('scope:change',  function(data) { socket.to('project:' + data.project_id).emit('scope:changed', data); });
   socket.on('ping',          function()     { socket.emit('pong', { time: Date.now() }); });
   socket.on('disconnect',    function(r)    { logger.info('Socket disconnected: user ' + uid + ' (' + r + ')'); });
-  socket.on('error',         function(e)    { logger.error('Socket error user ' + uid + ': ' + e.message); });
 });
 
 notificationSvc.setSocketIO(io);
 
-// ── Auto-seed (called after DB is ready) ──────────────────────────────────
+// ── Auto-seed if DB is empty ───────────────────────────────────────────────
 async function autoSeed() {
   if (process.env.AUTO_SEED !== 'true') return;
   try {
-    const { Role } = require('./src/models');
-    const count = await Role.count();
+    var models = require('./src/models');
+    var count  = await models.Role.count();
     if (count === 0) {
-      logger.info('Empty database — running auto-seed...');
-      const seedFn = require('./database/seeders/seed');
+      logger.info('[SEED] Empty database — running auto-seed...');
+      var seedFn = require('./database/seeders/seed');
       await seedFn();
-      logger.info('Auto-seed complete');
+      logger.info('[SEED] Seeding complete');
     } else {
-      logger.info('Database already seeded (' + count + ' roles) — skipping');
+      logger.info('[SEED] Database already has ' + count + ' roles — skipping seed');
     }
-  } catch (err) {
-    logger.warn('Auto-seed skipped: ' + err.message);
+  } catch (e) {
+    logger.warn('[SEED] Skipped: ' + e.message);
   }
 }
 
-// ── DB init runs in the background after port is open ─────────────────────
+// ── Database init — runs AFTER port is open ────────────────────────────────
+// This is the correct Render pattern: bind port first so Render detects
+// the service as alive, then connect the database in the background.
 async function initDatabase() {
-  if (!process.env.DATABASE_URL) {
-    logger.warn('DATABASE_URL not set — running without database. Set it in Render dashboard.');
+  // Log what DB config we're using
+  if (process.env.DATABASE_URL) {
+    logger.info('[DB] Connecting via DATABASE_URL...');
+  } else if (process.env.DB_HOST) {
+    logger.info('[DB] Connecting via DB_HOST=' + process.env.DB_HOST + ' DB_NAME=' + process.env.DB_NAME);
+  } else {
+    logger.warn('[DB] WARNING: No DATABASE_URL or DB_HOST configured.');
+    logger.warn('[DB] Set DATABASE_URL in Render dashboard → Environment → Add Environment Variable');
+    logger.warn('[DB] API requests will return 503 until database is configured.');
+    // dbReady stays false — routes/index.js will return 503 for API calls
     return;
   }
+
   try {
-    await connectDB();       // retries up to 8x with backoff
+    await dbConfig.connectDB();
     await autoSeed();
-    app.locals.dbReady = true;
-    logger.info('Database ready — API fully operational');
+    app.locals.dbReady  = true;
+    app.locals.dbStatus = 'connected';
+    logger.info('[DB] Ready — all API routes operational');
   } catch (err) {
-    logger.error('Database initialization failed: ' + err.message);
-    // Server stays alive — health endpoint continues to respond
-    // Render will keep retrying; DB may become available after DB instance warms up
+    logger.error('[DB] Connection failed: ' + err.message);
+    app.locals.dbReady  = false;
+    app.locals.dbStatus = 'error: ' + err.message.slice(0, 200);
+    logger.error('[DB] API routes will return 503 until database is reachable.');
+    logger.error('[DB] Check DATABASE_URL and that the Render PostgreSQL instance is running.');
   }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
-// START: bind the port IMMEDIATELY, THEN connect DB in background.
-// This prevents Render's "No open ports detected" error which happens when
-// the DB is slow to start and the server never reaches server.listen().
+// STARTUP — port MUST be open before any async work.
+// Render's deploy scanner looks for an open port within ~30 seconds.
+// If the port never opens, Render marks the deploy as failed.
 // ══════════════════════════════════════════════════════════════════════════
-app.locals.dbReady = false;
+app.locals.dbReady  = false;
+app.locals.dbStatus = 'connecting';
 
 server.listen(PORT, '0.0.0.0', function() {
-  logger.info('='.repeat(55));
-  logger.info('  ProHorizon Scope Tracker');
-  logger.info('  Listening on port ' + PORT);
-  logger.info('  NODE_ENV: ' + (process.env.NODE_ENV || 'development'));
-  logger.info('  DB: ' + (process.env.DATABASE_URL ? 'connecting in background...' : 'NOT CONFIGURED'));
-  logger.info('='.repeat(55));
+  logger.info('='.repeat(60));
+  logger.info('  ProHorizon Scope Tracker — Server started');
+  logger.info('  Port       : ' + PORT);
+  logger.info('  NODE_ENV   : ' + (process.env.NODE_ENV || 'development'));
+  logger.info('  DB_URL set : ' + (process.env.DATABASE_URL ? 'YES' : 'NO'));
+  logger.info('  DB_HOST set: ' + (process.env.DB_HOST    ? process.env.DB_HOST : 'NO'));
+  logger.info('='.repeat(60));
 
-  // Signal PM2 / Render that the process is alive
   if (process.send) process.send('ready');
 
-  // Start DB connection AFTER port is open
+  // Non-blocking — database connects after port is open
   initDatabase();
 });
 
 server.on('error', function(err) {
-  logger.error('Server error: ' + err.message);
+  if (err.code === 'EADDRINUSE') {
+    logger.error('Port ' + PORT + ' is already in use');
+  } else {
+    logger.error('Server error: ' + err.message);
+  }
   process.exit(1);
 });
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────
 function shutdown(signal) {
-  logger.info(signal + ' received — shutting down...');
+  logger.info(signal + ' — shutting down gracefully...');
   server.close(function() {
-    try {
-      var db = require('./src/config/database');
-      db.sequelize.close();
-    } catch (_) {}
+    try { dbConfig.sequelize.close(); } catch (_) {}
     process.exit(0);
   });
   setTimeout(function() { process.exit(1); }, 10000);
@@ -137,5 +148,5 @@ function shutdown(signal) {
 
 process.on('SIGTERM', function() { shutdown('SIGTERM'); });
 process.on('SIGINT',  function() { shutdown('SIGINT'); });
-process.on('uncaughtException',  function(err) { logger.error('Uncaught: ' + err.message); process.exit(1); });
-process.on('unhandledRejection', function(r)   { logger.error('Unhandled rejection: ' + r); process.exit(1); });
+process.on('uncaughtException',  function(e) { logger.error('Uncaught: ' + e.message + '\n' + e.stack); process.exit(1); });
+process.on('unhandledRejection', function(r)  { logger.error('Unhandled rejection: ' + r); process.exit(1); });
