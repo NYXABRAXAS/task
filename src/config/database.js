@@ -6,16 +6,14 @@ const logger = require('../utils/logger');
 const poolConfig = {
   max:     parseInt(process.env.DB_POOL_MAX)     || 10,
   min:     parseInt(process.env.DB_POOL_MIN)     || 2,
-  acquire: parseInt(process.env.DB_POOL_ACQUIRE) || 30000,
+  acquire: parseInt(process.env.DB_POOL_ACQUIRE) || 60000,
   idle:    parseInt(process.env.DB_POOL_IDLE)    || 10000,
 };
 
 const sharedOptions = {
   dialect: 'postgres',
   pool: poolConfig,
-  logging: (msg) => {
-    if (process.env.NODE_ENV === 'development') logger.debug(msg);
-  },
+  logging: false,
   define: {
     underscored:     false,
     freezeTableName: true,
@@ -50,28 +48,29 @@ if (process.env.DATABASE_URL) {
   );
 }
 
-// Retry up to 8 times (~2 min) - Render free PostgreSQL can take 30-90s to
-// become reachable after a fresh deploy.
-const connectDB = async () => {
-  const MAX_RETRIES = 8;
-  const BASE_DELAY  = 5000;
+// Retry up to 10 times with linear backoff.
+// Throws on final failure — caller decides whether to crash or continue.
+const connectDB = async function() {
+  var MAX_RETRIES = 10;
+  var BASE_DELAY  = 6000; // ms
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+  for (var attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
       await sequelize.authenticate();
       logger.info('PostgreSQL connected');
       await sequelize.sync({ force: false, alter: false });
       logger.info('Database schema synchronized');
-      return;
+      return; // success
     } catch (err) {
-      const isLast = attempt === MAX_RETRIES;
-      const delay  = BASE_DELAY * attempt;
+      var isLast = attempt === MAX_RETRIES;
+      var delay  = BASE_DELAY * attempt;
+
       if (isLast) {
-        logger.error('Database connection failed after ' + MAX_RETRIES + ' attempts: ' + err.message);
-        process.exit(1);
+        throw new Error('DB connect failed after ' + MAX_RETRIES + ' attempts: ' + err.message);
       }
-      logger.warn('DB connect attempt ' + attempt + '/' + MAX_RETRIES + ' failed. Retrying in ' + (delay / 1000) + 's...');
-      await new Promise(function(r) { setTimeout(r, delay); });
+
+      logger.warn('DB connect attempt ' + attempt + '/' + MAX_RETRIES + ' failed (' + err.message.substring(0, 80) + '). Retry in ' + (delay / 1000) + 's...');
+      await new Promise(function(resolve) { setTimeout(resolve, delay); });
     }
   }
 };
