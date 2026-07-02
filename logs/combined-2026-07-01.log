@@ -1,7 +1,0 @@
-[2026-07-01 16:00:50] INFO: =======================================================
-[2026-07-01 16:00:50] INFO:   ProHorizon Scope Tracker
-[2026-07-01 16:00:50] INFO:   Listening on port 10000
-[2026-07-01 16:00:50] INFO:   NODE_ENV: development
-[2026-07-01 16:00:50] INFO:   DB: NOT CONFIGURED
-[2026-07-01 16:00:50] INFO: =======================================================
-[2026-07-01 16:00:50] WARN: DATABASE_URL not set — running without database. Set it in Render dashboard.
