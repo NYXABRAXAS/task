@@ -74,13 +74,13 @@ const ROLE_PERMISSIONS = {
 };
 
 const ROLES_META = [
-  { name:'super_admin',     slug:'super_admin',     description:'Full system access',             is_system:true },
-  { name:'admin',           slug:'admin',           description:'Administrative access',          is_system:true },
-  { name:'project_manager', slug:'project_manager', description:'Manages projects and teams',     is_system:true },
-  { name:'scope_analyst',   slug:'scope_analyst',   description:'Manages scope documents',        is_system:true },
-  { name:'developer',       slug:'developer',       description:'Development team member',        is_system:true },
-  { name:'qa_engineer',     slug:'qa_engineer',     description:'Quality assurance',              is_system:true },
-  { name:'client_viewer',   slug:'client_viewer',   description:'Client portal read-only access', is_system:true },
+  { name:'super_admin',     display_name:'Super Admin',      description:'Full system access',             is_system:true },
+  { name:'admin',           display_name:'Admin',            description:'Administrative access',          is_system:true },
+  { name:'project_manager', display_name:'Project Manager',  description:'Manages projects and teams',     is_system:true },
+  { name:'scope_analyst',   display_name:'Scope Analyst',    description:'Manages scope documents',        is_system:true },
+  { name:'developer',       display_name:'Developer',        description:'Development team member',        is_system:true },
+  { name:'qa_engineer',     display_name:'QA Engineer',      description:'Quality assurance',              is_system:true },
+  { name:'client_viewer',   display_name:'Client Viewer',    description:'Client portal read-only access', is_system:true },
 ];
 
 const DEPARTMENTS_DATA = [
